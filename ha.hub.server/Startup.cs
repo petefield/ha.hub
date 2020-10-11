@@ -74,38 +74,38 @@ namespace test
         {
             var deviceContollersRepositoryPath = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "devicecontrollers");
 
-
             Console.WriteLine($"Looking for controllers in {deviceContollersRepositoryPath}");
 
-            foreach(var assembly in System.IO.Directory.GetFiles(deviceContollersRepositoryPath))
-            {            
-                if(System.IO.Path.GetExtension(assembly) == ".dll"){
-                    Assembly.LoadFrom(assembly);
-                }
-            }
-
-            var deviceControllers = AppDomain.CurrentDomain.GetAssemblies()
-                .SelectMany(x => x.DefinedTypes)
-                .Where(type => type.IsClass && typeof(IDeviceController).IsAssignableFrom(type));
-
-            var deviceControllerDictionary = new Dictionary<string, Type>();
-
-            foreach (var deviceController in deviceControllers)
+            var dlls = System.IO.Directory.EnumerateFiles(deviceContollersRepositoryPath, "habridge*.dll", new System.IO.EnumerationOptions
             {
-                if (deviceController.GetCustomAttributes(typeof(DeviceTypeAttribute), true).Length > 0)
-                {
-                    var deviceTypeAttribute = deviceController.GetCustomAttributes<DeviceTypeAttribute>().First();
-                    var deviceControllerType = deviceController.AsType();
-                    services.AddSingleton(deviceControllerType);
-                    deviceControllerDictionary.Add(deviceTypeAttribute.Name, deviceControllerType);
-                    Console.WriteLine($" - Added {deviceTypeAttribute.Name}");
+                RecurseSubdirectories = true
+            });
 
-                }
-            }
+            var deviceControllers = dlls.Select(Assembly.LoadFrom)
+                .SelectMany(assembly => assembly.DefinedTypes)
+                .Where(IsValidDeviceBridge)
+                .Select(services.AddService)
+                .ToDictionary();
 
-            services.AddSingleton<IDeviceControllerFactory>(ctx => new DeviceControllerFactory(ctx, deviceControllerDictionary));
+            services.AddSingleton<IDeviceControllerFactory>(ctx => new DeviceControllerFactory(ctx, deviceControllers));
         }
 
+        public static bool IsValidDeviceBridge(TypeInfo ti) => ti.IsClass &&
+            typeof(IDeviceController).IsAssignableFrom(ti) &&
+            ti.GetCustomAttributes(typeof(DeviceTypeAttribute), true).Length > 0;
+    }
 
+    public static class TypeExtensions
+    {
+        public static KeyValuePair<string, Type> AddService(this IServiceCollection services, TypeInfo ti)
+        {
+            var deviceTypeAttributeName = ti.GetCustomAttributes<DeviceTypeAttribute>().First().Name;
+            var deviceControllerType = ti.AsType();
+            services.AddSingleton(deviceControllerType);
+            Console.WriteLine($" - Added {deviceTypeAttributeName}");
+            return new KeyValuePair<string, Type>(deviceTypeAttributeName, deviceControllerType);
+        }
+
+        public static Dictionary<K, V> ToDictionary<K, V>(this IEnumerable<KeyValuePair<K, V>> values) => values.ToDictionary(e => e.Key, e => e.Value);
     }
 }
